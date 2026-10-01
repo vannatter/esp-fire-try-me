@@ -120,6 +120,26 @@ void setup() {
     server.begin();
 }
 
+// Current firing cadence, or 0 (idle). Prefers real NTP time; if time was never
+// obtained (no WiFi), falls back to assuming power came on at 6pm EST and runs
+// the schedule off uptime -- power hits the ESP and props together at 6pm, so
+// millis() since boot == minutes since 6pm.
+static uint32_t scheduleInterval() {
+    struct tm t;
+    if (getLocalTime(&t, 0) && t.tm_year > (2020 - 1900)) {
+        int h = t.tm_hour;
+        if (h >= 19 && h < 22)     return EVENING_MS;   // 7pm-10pm
+        if (h >= 22 || h < 2)      return LATE_MS;       // 10pm-2am
+        return 0;                                        // 2am-7pm idle
+    }
+    // Fallback: boot ~= 6pm. Map uptime-minutes onto the same schedule.
+    uint32_t mins = millis() / 60000UL;
+    if (mins < 60)   return 0;            // 6pm-7pm idle
+    if (mins < 240)  return EVENING_MS;   // 7pm-10pm
+    if (mins < 480)  return LATE_MS;      // 10pm-2am
+    return 0;                             // after 2am (power is cut anyway)
+}
+
 void loop() {
     uint32_t now = millis();
     server.handleClient();
@@ -134,28 +154,22 @@ void loop() {
     // Manual test.
     if (Serial.available() && Serial.read() == 'f') fireBoth();
 
-    // No valid time yet -> keep trying WiFi/NTP, don't fire.
+    // Keep trying for real time in the background (non-blocking) if not synced,
+    // so the schedule snaps to true time if the network ever comes up. Meanwhile
+    // scheduleInterval() runs the assume-6pm fallback -- firing never stalls.
     if (!timeValid()) {
         static uint32_t retry = 0;
-        if (now - retry > 30000) {
+        if (now - retry > 60000) {
             retry = now;
-            if (WiFi.status() != WL_CONNECTED) connectWiFi();
+            if (WiFi.status() != WL_CONNECTED) WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
             configTzTime(TZ_STR, NTP1, NTP2);
         }
-        delay(50);
-        return;
     }
 
-    struct tm t;
-    getLocalTime(&t);
-    int hour = t.tm_hour;
-
-    uint32_t interval;
-    if (hour >= 19 && hour < 22)        interval = EVENING_MS;   // 7pm-10pm
-    else if (hour >= 22 || hour < 2)    interval = LATE_MS;      // 10pm-2am
-    else { nextFireAt = 0; delay(200); return; }                // 2am-7pm idle
-
-    if (nextFireAt == 0 || (int32_t)(now - nextFireAt) >= 0) {
+    uint32_t interval = scheduleInterval();
+    if (interval == 0) {
+        nextFireAt = 0;                                  // idle window
+    } else if (nextFireAt == 0 || (int32_t)(now - nextFireAt) >= 0) {
         fireBoth();
         nextFireAt = now + interval + (uint32_t)random(0, JITTER_MS);
     }

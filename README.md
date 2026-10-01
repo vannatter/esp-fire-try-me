@@ -13,8 +13,13 @@ nightly Halloween schedule.
 
 Time comes from **NTP over WiFi** and auto-handles daylight saving (EDT on
 Halloween). Once synced, the ESP's own clock keeps running, so a WiFi hiccup
-won't stop the schedule. If it can't get the time at all (no WiFi), it stays
-idle rather than firing blindly.
+won't stop the schedule.
+
+**No-network fallback:** power reaches the ESP and the props together at **6pm
+EST**, so if NTP can't be reached it assumes it booted at 6pm and runs the exact
+same schedule off its uptime (minute 0 = 6pm → the 7pm/10pm/2am boundaries fall
+where they should). It keeps retrying NTP in the background and snaps to true
+time the instant the network comes up.
 
 ## Wiring
 
