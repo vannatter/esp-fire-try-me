@@ -18,6 +18,7 @@
 
 #include <Arduino.h>
 #include <WiFi.h>
+#include <WebServer.h>
 #include <time.h>
 
 #include "secrets.h"   // WIFI_SSID / WIFI_PASSWORD
@@ -36,16 +37,37 @@ static const uint32_t JITTER_MS  = 8000;  // +0..8s random, so it isn't robotic
 static const char* TZ_STR = "EST5EDT,M3.2.0,M11.1.0";
 static const char* NTP1 = "pool.ntp.org";
 static const char* NTP2 = "time.nist.gov";
+
+// Static IP so the Frankenstein dashboard can reach /fire at a fixed address.
+// (Espressif chip — static holds fine. Quiet 71.x range, like boards 2/3.)
+#define STATIC_IP   192, 168, 71, 204
+#define STATIC_GW   192, 168, 68, 1
+#define STATIC_MASK 255, 255, 252, 0
+#define STATIC_DNS  8, 8, 8, 8
+static WebServer server(80);
 // ----------------------------------------------------------------------------
 
 static uint32_t pulseOffAt = 0;   // when to release the current pulse (0 = idle)
 static uint32_t nextFireAt = 0;   // when to fire next (0 = fire on next active tick)
 
-static void fireBoth() {
-    digitalWrite(TRY_PIN_A, TRIGGER_ON);
-    digitalWrite(TRY_PIN_B, TRIGGER_ON);
+static void firePins(bool a, bool b) {
+    if (a) digitalWrite(TRY_PIN_A, TRIGGER_ON);
+    if (b) digitalWrite(TRY_PIN_B, TRIGGER_ON);
     pulseOffAt = millis() + PULSE_MS;
-    Serial.println("FIRE -> both Try-Me");
+    Serial.printf("FIRE -> prop1=%d prop2=%d\n", a, b);
+}
+static void fireBoth() { firePins(true, true); }
+
+// /fire            -> both props
+// /fire?which=1    -> prop 1 only
+// /fire?which=2    -> prop 2 only
+static void handleFire() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    String w = server.hasArg("which") ? server.arg("which") : "both";
+    if (w == "1")      firePins(true, false);
+    else if (w == "2") firePins(false, true);
+    else               firePins(true, true);
+    server.send(200, "application/json", "{\"fired\":\"" + w + "\"}\n");
 }
 
 static bool timeValid() {
@@ -56,6 +78,8 @@ static bool timeValid() {
 
 static void connectWiFi() {
     WiFi.mode(WIFI_STA);
+    WiFi.config(IPAddress(STATIC_IP), IPAddress(STATIC_GW),
+                IPAddress(STATIC_MASK), IPAddress(STATIC_DNS));
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("WiFi connecting");
     uint32_t start = millis();
@@ -63,7 +87,10 @@ static void connectWiFi() {
         delay(250);
         Serial.print(".");
     }
-    Serial.println(WiFi.status() == WL_CONNECTED ? " connected" : " (no WiFi yet)");
+    if (WiFi.status() == WL_CONNECTED)
+        Serial.println(" connected: http://" + WiFi.localIP().toString() + "/");
+    else
+        Serial.println(" (no WiFi yet)");
 }
 
 void setup() {
@@ -83,10 +110,19 @@ void setup() {
         Serial.println(" NOT synced yet (will keep retrying)");
     }
     Serial.println("Serial 'f' = manual fire test.");
+
+    server.on("/fire", handleFire);
+    server.on("/", []() {
+        server.sendHeader("Access-Control-Allow-Origin", "*");
+        server.send(200, "text/plain", "esp-fire-try-me — /fire ?which=1|2|both\n");
+    });
+    server.enableCORS(true);
+    server.begin();
 }
 
 void loop() {
     uint32_t now = millis();
+    server.handleClient();
 
     // Release a finished pulse.
     if (pulseOffAt && now >= pulseOffAt) {
