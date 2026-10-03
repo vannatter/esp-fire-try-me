@@ -8,8 +8,8 @@ nightly Halloween schedule.
 | Time | Cadence |
 |------|---------|
 | 7:00pm – 9:59pm | fire ~every **1 minute** (+0–8s jitter) |
-| 10:00pm – 1:59am | fire every **5 minutes** (+jitter) |
-| 2:00am – 7:00pm | idle (power is cut ~2am anyway) |
+| 10:00pm – 11:59pm | fire every **5 minutes** (+jitter) |
+| midnight – 7:00pm | idle — **never fires after 12am** |
 
 Time comes from **NTP over WiFi** and auto-handles daylight saving (EDT on
 Halloween). Once synced, the ESP's own clock keeps running, so a WiFi hiccup

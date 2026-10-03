@@ -129,15 +129,15 @@ static uint32_t scheduleInterval() {
     if (getLocalTime(&t, 0) && t.tm_year > (2020 - 1900)) {
         int h = t.tm_hour;
         if (h >= 19 && h < 22)     return EVENING_MS;   // 7pm-10pm
-        if (h >= 22 || h < 2)      return LATE_MS;       // 10pm-2am
-        return 0;                                        // 2am-7pm idle
+        if (h >= 22)               return LATE_MS;       // 10pm-midnight
+        return 0;                                        // midnight-7pm idle (never fires after 12am)
     }
     // Fallback: boot ~= 6pm. Map uptime-minutes onto the same schedule.
     uint32_t mins = millis() / 60000UL;
     if (mins < 60)   return 0;            // 6pm-7pm idle
     if (mins < 240)  return EVENING_MS;   // 7pm-10pm
-    if (mins < 480)  return LATE_MS;      // 10pm-2am
-    return 0;                             // after 2am (power is cut anyway)
+    if (mins < 360)  return LATE_MS;      // 10pm-midnight
+    return 0;                             // midnight on, idle (never fires after 12am)
 }
 
 void loop() {
