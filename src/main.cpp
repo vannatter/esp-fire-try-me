@@ -29,6 +29,9 @@ static const int TRY_PIN_B = 26;          // animatronic 2 -> LR7843 signal in
 static const int TRIGGER_ON = HIGH;       // LR7843 is active-HIGH; set LOW for an
                                           // active-low relay module instead
 static const uint32_t PULSE_MS   = 500;   // how long to "hold" each button
+static const uint32_t STAGGER_MS = 250;   // when firing both, delay prop 2 after
+                                          // prop 1 (prop 2 sometimes missed when
+                                          // both triggered at the same instant)
 static const uint32_t EVENING_MS = 60000; // 7-10pm  -> ~1 min
 static const uint32_t LATE_MS    = 300000;// 10pm-2am -> 5 min
 static const uint32_t JITTER_MS  = 8000;  // +0..8s random, so it isn't robotic
@@ -47,16 +50,37 @@ static const char* NTP2 = "time.nist.gov";
 static WebServer server(80);
 // ----------------------------------------------------------------------------
 
-static uint32_t pulseOffAt = 0;   // when to release the current pulse (0 = idle)
-static uint32_t nextFireAt = 0;   // when to fire next (0 = fire on next active tick)
+// Independent pulse timers per pin so the two props can be staggered (0 = idle).
+static uint32_t aOffAt = 0;        // release prop 1 at this time
+static uint32_t bOnAt  = 0;        // start prop 2 at this time (staggered)
+static uint32_t bOffAt = 0;        // release prop 2 at this time
+static uint32_t nextFireAt = 0;    // when to fire next (0 = fire on next active tick)
 
 static void firePins(bool a, bool b) {
-    if (a) digitalWrite(TRY_PIN_A, TRIGGER_ON);
-    if (b) digitalWrite(TRY_PIN_B, TRIGGER_ON);
-    pulseOffAt = millis() + PULSE_MS;
+    uint32_t now = millis();
+    if (a) { digitalWrite(TRY_PIN_A, TRIGGER_ON); aOffAt = now + PULSE_MS; }
+    if (b) {
+        if (a) {
+            bOnAt = now + STAGGER_MS;           // both: fire prop 2 a beat later
+        } else {
+            digitalWrite(TRY_PIN_B, TRIGGER_ON); // prop 2 only: fire immediately
+            bOffAt = now + PULSE_MS;
+        }
+    }
     Serial.printf("FIRE -> prop1=%d prop2=%d\n", a, b);
 }
 static void fireBoth() { firePins(true, true); }
+
+// Drive the per-pin pulse state machine; call every loop.
+static void servicePulses(uint32_t now) {
+    if (bOnAt && (int32_t)(now - bOnAt) >= 0) {   // staggered prop-2 start
+        digitalWrite(TRY_PIN_B, TRIGGER_ON);
+        bOffAt = now + PULSE_MS;
+        bOnAt = 0;
+    }
+    if (aOffAt && (int32_t)(now - aOffAt) >= 0) { digitalWrite(TRY_PIN_A, !TRIGGER_ON); aOffAt = 0; }
+    if (bOffAt && (int32_t)(now - bOffAt) >= 0) { digitalWrite(TRY_PIN_B, !TRIGGER_ON); bOffAt = 0; }
+}
 
 // /fire            -> both props
 // /fire?which=1    -> prop 1 only
@@ -144,12 +168,8 @@ void loop() {
     uint32_t now = millis();
     server.handleClient();
 
-    // Release a finished pulse.
-    if (pulseOffAt && now >= pulseOffAt) {
-        digitalWrite(TRY_PIN_A, !TRIGGER_ON);
-        digitalWrite(TRY_PIN_B, !TRIGGER_ON);
-        pulseOffAt = 0;
-    }
+    // Drive the staggered per-pin pulses.
+    servicePulses(now);
 
     // Manual test.
     if (Serial.available() && Serial.read() == 'f') fireBoth();
