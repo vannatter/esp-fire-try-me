@@ -19,6 +19,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Preferences.h>
 #include <time.h>
 
 #include "secrets.h"   // WIFI_SSID / WIFI_PASSWORD
@@ -48,6 +49,49 @@ static const char* NTP2 = "time.nist.gov";
 #define STATIC_MASK 255, 255, 252, 0
 #define STATIC_DNS  8, 8, 8, 8
 static WebServer server(80);
+// ----------------------------------------------------------------------------
+
+// ---- runtime schedule (editable from the dashboard, saved in flash) --------
+// Survives the nightly power-cut via NVS, so it isn't lost at each 6pm boot.
+// Hours are 0-23 (0 = midnight). The constants above are just the defaults.
+struct Sched {
+    bool     armed;        // master on/off for autonomous firing
+    uint8_t  startHour;    // begin firing (evening cadence)
+    uint8_t  lateHour;     // switch to the slower "late" cadence
+    uint8_t  stopHour;     // go idle (no firing from here on)
+    uint32_t eveningMs;    // evening cadence
+    uint32_t lateMs;       // late cadence
+};
+static Sched g;
+static Preferences prefs;
+
+static void loadSched() {
+    prefs.begin("tryme", true);
+    g.armed     = prefs.getBool ("armed", true);
+    g.startHour = prefs.getUChar("start", 19);   // 7pm
+    g.lateHour  = prefs.getUChar("late",  22);   // 10pm
+    g.stopHour  = prefs.getUChar("stop",   0);   // midnight
+    g.eveningMs = prefs.getUInt ("evms",  EVENING_MS);
+    g.lateMs    = prefs.getUInt ("latms", LATE_MS);
+    prefs.end();
+}
+static void saveSched() {
+    prefs.begin("tryme", false);
+    prefs.putBool ("armed", g.armed);
+    prefs.putUChar("start", g.startHour);
+    prefs.putUChar("late",  g.lateHour);
+    prefs.putUChar("stop",  g.stopHour);
+    prefs.putUInt ("evms",  g.eveningMs);
+    prefs.putUInt ("latms", g.lateMs);
+    prefs.end();
+}
+
+// Is hour h within [start, end) on a clock that may wrap past midnight?
+static bool hourInRange(int h, int start, int end) {
+    if (start == end) return false;
+    if (start <  end) return h >= start && h < end;
+    return h >= start || h < end;     // window crosses midnight (e.g. 22->2)
+}
 // ----------------------------------------------------------------------------
 
 // Independent pulse timers per pin so the two props can be staggered (0 = idle).
@@ -94,6 +138,31 @@ static void handleFire() {
     server.send(200, "application/json", "{\"fired\":\"" + w + "\"}\n");
 }
 
+static String schedJson() {
+    char buf[220];
+    snprintf(buf, sizeof(buf),
+        "{\"armed\":%d,\"start\":%u,\"late\":%u,\"stop\":%u,"
+        "\"eveningMin\":%lu,\"lateMin\":%lu}\n",
+        g.armed ? 1 : 0, g.startHour, g.lateHour, g.stopHour,
+        (unsigned long)(g.eveningMs / 60000UL), (unsigned long)(g.lateMs / 60000UL));
+    return String(buf);
+}
+
+// GET /schedule                       -> current settings as JSON
+// GET /schedule?armed=0/1&start=19&late=22&stop=0&evmin=1&latmin=5  -> set+save
+static void handleSchedule() {
+    server.sendHeader("Access-Control-Allow-Origin", "*");
+    bool changed = false;
+    if (server.hasArg("armed"))  { g.armed     = server.arg("armed") == "1"; changed = true; }
+    if (server.hasArg("start"))  { g.startHour = constrain(server.arg("start").toInt(), 0, 23); changed = true; }
+    if (server.hasArg("late"))   { g.lateHour  = constrain(server.arg("late").toInt(),  0, 23); changed = true; }
+    if (server.hasArg("stop"))   { g.stopHour  = constrain(server.arg("stop").toInt(),  0, 23); changed = true; }
+    if (server.hasArg("evmin"))  { g.eveningMs = (uint32_t)max(1L, server.arg("evmin").toInt())  * 60000UL; changed = true; }
+    if (server.hasArg("latmin")) { g.lateMs    = (uint32_t)max(1L, server.arg("latmin").toInt()) * 60000UL; changed = true; }
+    if (changed) saveSched();
+    server.send(200, "application/json", schedJson());
+}
+
 static bool timeValid() {
     struct tm t;
     if (!getLocalTime(&t, 0)) return false;
@@ -122,6 +191,8 @@ void setup() {
     pinMode(TRY_PIN_A, OUTPUT); digitalWrite(TRY_PIN_A, !TRIGGER_ON);
     pinMode(TRY_PIN_B, OUTPUT); digitalWrite(TRY_PIN_B, !TRIGGER_ON);
 
+    loadSched();   // restore the schedule saved before the last power-cut
+
     connectWiFi();
     configTzTime(TZ_STR, NTP1, NTP2);
     Serial.print("waiting for NTP time");
@@ -136,32 +207,34 @@ void setup() {
     Serial.println("Serial 'f' = manual fire test.");
 
     server.on("/fire", handleFire);
+    server.on("/schedule", handleSchedule);
     server.on("/", []() {
         server.sendHeader("Access-Control-Allow-Origin", "*");
-        server.send(200, "text/plain", "esp-fire-try-me — /fire ?which=1|2|both\n");
+        server.send(200, "text/plain",
+            "esp-fire-try-me\n/fire ?which=1|2|both\n"
+            "/schedule ?armed=0/1&start=19&late=22&stop=0&evmin=1&latmin=5\n");
     });
     server.enableCORS(true);
     server.begin();
 }
 
-// Current firing cadence, or 0 (idle). Prefers real NTP time; if time was never
-// obtained (no WiFi), falls back to assuming power came on at 6pm EST and runs
-// the schedule off uptime -- power hits the ESP and props together at 6pm, so
-// millis() since boot == minutes since 6pm.
-static uint32_t scheduleInterval() {
+// Current hour (0-23). Prefers real NTP time; if time was never obtained (no
+// WiFi), falls back to assuming power came on at 6pm EST -- power hits the ESP
+// and props together at 6pm, so uptime advances the virtual clock from 18:00.
+static int currentHour() {
     struct tm t;
-    if (getLocalTime(&t, 0) && t.tm_year > (2020 - 1900)) {
-        int h = t.tm_hour;
-        if (h >= 19 && h < 22)     return EVENING_MS;   // 7pm-10pm
-        if (h >= 22)               return LATE_MS;       // 10pm-midnight
-        return 0;                                        // midnight-7pm idle (never fires after 12am)
-    }
-    // Fallback: boot ~= 6pm. Map uptime-minutes onto the same schedule.
-    uint32_t mins = millis() / 60000UL;
-    if (mins < 60)   return 0;            // 6pm-7pm idle
-    if (mins < 240)  return EVENING_MS;   // 7pm-10pm
-    if (mins < 360)  return LATE_MS;      // 10pm-midnight
-    return 0;                             // midnight on, idle (never fires after 12am)
+    if (getLocalTime(&t, 0) && t.tm_year > (2020 - 1900)) return t.tm_hour;
+    uint32_t vmin = (18 * 60UL + millis() / 60000UL) % (24 * 60UL);  // boot = 18:00
+    return (int)(vmin / 60);
+}
+
+// Current firing cadence, or 0 (idle), per the editable schedule.
+static uint32_t scheduleInterval() {
+    if (!g.armed) return 0;
+    int h = currentHour();
+    if (hourInRange(h, g.startHour, g.lateHour)) return g.eveningMs;  // evening
+    if (hourInRange(h, g.lateHour,  g.stopHour)) return g.lateMs;     // late
+    return 0;                                                          // idle
 }
 
 void loop() {

@@ -5,11 +5,19 @@ nightly Halloween schedule.
 
 ## Schedule (local EST/EDT)
 
+Defaults (all of this is **editable live from the Frankenstein dashboard** and
+saved in flash, so it survives the nightly power-cut):
+
 | Time | Cadence |
 |------|---------|
 | 7:00pm – 9:59pm | fire ~every **1 minute** (+0–8s jitter) |
 | 10:00pm – 11:59pm | fire every **5 minutes** (+jitter) |
 | midnight – 7:00pm | idle — **never fires after 12am** |
+
+`GET /schedule` returns the current settings; `GET /schedule?armed=0/1&start=19&
+late=22&stop=0&evmin=1&latmin=5` sets and persists them (hours 0–23, 0 = midnight;
+`armed=0` disables all autonomous firing). Windows may cross midnight (e.g.
+`late=22&stop=2` fires until 2am). Manual `/fire` works regardless of the schedule.
 
 Time comes from **NTP over WiFi** and auto-handles daylight saving (EDT on
 Halloween). Once synced, the ESP's own clock keeps running, so a WiFi hiccup
