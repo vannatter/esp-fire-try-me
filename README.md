@@ -60,7 +60,7 @@ pio device monitor          # 115200 — shows sync + fires; type 'f' to test-fi
 **Wireless (OTA) flashing** — after the first USB flash, reflash over WiFi:
 
 ```
-pio run -e esp32_ota -t upload   # finds the board at esp-fire-tryme.local
+pio run -e esp32_ota -t upload   # flashes the board at 192.168.71.204
 ```
 
 Password is `OTA_PASSWORD` (defaults to `frankenlab`; override in `secrets.h`,
