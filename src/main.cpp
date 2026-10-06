@@ -1,20 +1,27 @@
 // esp-fire-try-me
 //
-// Fires two animatronics' Try-Me triggers TOGETHER on a nightly schedule:
-//   * 7:00pm - 9:59pm  ->  ~every 1 minute
-//   * 10:00pm - 1:59am ->  every 5 minutes
-//   * otherwise (2am - 7pm) -> idle
-// Power is cut to the ESP + props ~2am, so there's nothing to do after that.
+// Fires two animatronics' Try-Me triggers on a nightly schedule. Defaults:
+//   * 7:00pm - 9:59pm   ->  ~every 1 minute
+//   * 10:00pm - 11:59pm ->  every 5 minutes
+//   * otherwise         ->  idle (never fires after midnight)
+// The whole schedule (armed, start/late/stop hours, both cadences) is editable
+// live from the Frankenstein dashboard via /schedule and saved in NVS, so it
+// survives the nightly power-cut. See scheduleInterval() / handleSchedule().
 //
 // Time comes from NTP over WiFi (auto-handles EST/EDT). The ESP's clock keeps
-// running after the first sync, so a WiFi drop won't stop the schedule.
+// running after the first sync. If NTP is never reached, it assumes power came on
+// at 6pm (the props + ESP are powered together then) and runs the schedule off
+// uptime instead -- firing never stalls waiting for a clock.
+//
+// Firing both staggers prop 2 by STAGGER_MS after prop 1 (simultaneous triggers
+// made prop 2 miss). Manual fire: /fire?which=1|2|both. Wireless reflash: OTA.
 //
 // Wiring: each animatronic's Try-Me goes through its own LR7843 opto-isolated
-// MOSFET module (same part used on the Frankenstein lights board):
+// MOSFET module (or a ULN2803 channel) -- same parts as the Frankenstein board:
 //   ESP TRY_PIN_A -> module 1 signal in,  ESP GND -> module 1 signal GND
 //   ESP TRY_PIN_B -> module 2 signal in,  ESP GND -> module 2 signal GND
 //   each prop's two Try-Me wires -> that module's load terminals
-// A pulse closes the prop's button for PULSE_MS. Both fire at the same instant.
+// A pulse closes the prop's button for PULSE_MS.
 
 #include <Arduino.h>
 #include <WiFi.h>
