@@ -60,11 +60,12 @@ pio device monitor          # 115200 — shows sync + fires; type 'f' to test-fi
 **Wireless (OTA) flashing** — after the first USB flash, reflash over WiFi:
 
 ```
-pio run -e esp32_ota -t upload   # flashes the board at 192.168.71.204
+./ota.sh          # builds, then uploads to 192.168.71.204 over WiFi
 ```
 
-Password is `OTA_PASSWORD` (defaults to `frankenlab`; override in `secrets.h`,
-and match `--auth=` in `platformio.ini`).
+Password is `OTA_PASSWORD` (defaults to `frankenlab`; override in `secrets.h`, or
+export `OTA_PASSWORD` before running). It uploads with `espota.py` rather than a
+PlatformIO `espota` env, which compiles too large for the partition.
 
 ## Tuning (top of `src/main.cpp`)
 
