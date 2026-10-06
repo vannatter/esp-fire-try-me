@@ -19,10 +19,15 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <WebServer.h>
+#include <ArduinoOTA.h>
 #include <Preferences.h>
 #include <time.h>
 
 #include "secrets.h"   // WIFI_SSID / WIFI_PASSWORD
+
+#ifndef OTA_PASSWORD
+#define OTA_PASSWORD "frankenlab"   // wireless-flash password (override in secrets.h)
+#endif
 
 // ---- config ----------------------------------------------------------------
 static const int TRY_PIN_A = 25;          // animatronic 1 -> LR7843 signal in
@@ -216,6 +221,12 @@ void setup() {
     });
     server.enableCORS(true);
     server.begin();
+
+    // Wireless flashing: pio run -e esp32_ota -t upload  (see platformio.ini)
+    ArduinoOTA.setHostname("esp-fire-tryme");
+    ArduinoOTA.setPassword(OTA_PASSWORD);
+    ArduinoOTA.begin();
+    Serial.println("OTA ready (wireless flashing enabled)");
 }
 
 // Current hour (0-23). Prefers real NTP time; if time was never obtained (no
@@ -240,6 +251,7 @@ static uint32_t scheduleInterval() {
 void loop() {
     uint32_t now = millis();
     server.handleClient();
+    ArduinoOTA.handle();   // wireless flashing
 
     // Drive the staggered per-pin pulses.
     servicePulses(now);

@@ -57,6 +57,15 @@ pio run -t upload
 pio device monitor          # 115200 — shows sync + fires; type 'f' to test-fire
 ```
 
+**Wireless (OTA) flashing** — after the first USB flash, reflash over WiFi:
+
+```
+pio run -e esp32_ota -t upload   # finds the board at esp-fire-tryme.local
+```
+
+Password is `OTA_PASSWORD` (defaults to `frankenlab`; override in `secrets.h`,
+and match `--auth=` in `platformio.ini`).
+
 ## Tuning (top of `src/main.cpp`)
 
 - `EVENING_MS` / `LATE_MS` — the two cadences
