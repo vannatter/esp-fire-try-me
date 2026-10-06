@@ -113,6 +113,11 @@ static uint32_t bOffAt = 0;        // release prop 2 at this time
 static uint32_t nextFireAt = 0;    // when to fire next (0 = fire on next active tick)
 
 static void firePins(bool a, bool b) {
+    // Don't restart a pulse that's still running: a repeated fire (overlapping
+    // schedule tick, double tap, or a reset-loop re-trigger) would keep pushing
+    // prop 2's staggered start into the future and starve it. Let the current
+    // A+B sequence finish first.
+    if (aOffAt || bOnAt || bOffAt) return;
     uint32_t now = millis();
     if (a) { digitalWrite(TRY_PIN_A, TRIGGER_ON); aOffAt = now + PULSE_MS; }
     if (b) {
@@ -183,6 +188,8 @@ static bool timeValid() {
 
 static void connectWiFi() {
     WiFi.mode(WIFI_STA);
+    WiFi.setSleep(false);                      // modem sleep causes dropped/laggy HTTP
+    WiFi.setTxPower(WIFI_POWER_11dBm);         // lower TX spike -> fewer brownout resets
     WiFi.config(IPAddress(STATIC_IP), IPAddress(STATIC_GW),
                 IPAddress(STATIC_MASK), IPAddress(STATIC_DNS));
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -263,8 +270,13 @@ void loop() {
     // Drive the staggered per-pin pulses.
     servicePulses(now);
 
-    // Manual test.
-    if (Serial.available() && Serial.read() == 'f') fireBoth();
+    // Manual test over serial: 1 = prop 1, 2 = prop 2, f/b = both.
+    if (Serial.available()) {
+        char c = Serial.read();
+        if      (c == '1') firePins(true, false);
+        else if (c == '2') firePins(false, true);
+        else if (c == 'f' || c == 'b') firePins(true, true);
+    }
 
     // Keep trying for real time in the background (non-blocking) if not synced,
     // so the schedule snaps to true time if the network ever comes up. Meanwhile
